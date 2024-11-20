@@ -11,6 +11,7 @@ import types
 class SigmasMergeScript(scripts.Script):
     def __init__(self):
         self.enabled = False
+        self.enable_for_hr = False  # New attribute for hi-res fix control
         self.merge_mode = "Average"
         self.proportion_1 = 0.5
         self.gradual_merge_proportion = 0.5
@@ -39,7 +40,9 @@ class SigmasMergeScript(scripts.Script):
         with gr.Accordion(open=False, label=self.title()):
             gr.HTML("<p><i>Adjust the settings for Sigmas Merge.</i></p>")
 
-            enabled = gr.Checkbox(label="Enable Sigmas Merge", value=self.enabled)
+            with gr.Row():
+                enabled = gr.Checkbox(label="Enable Sigmas Merge", value=self.enabled)
+                enable_for_hr = gr.Checkbox(label="Apply to Hi-res Fix", value=self.enable_for_hr)
 
             merge_mode = gr.Radio(
                 ["Average", "Gradual Merge", "Multi Average", "Multiply", "Concatenate", "Golden Scheduler", "Gaussian Tail", "Aligned", "Manual"],
@@ -95,18 +98,24 @@ class SigmasMergeScript(scripts.Script):
                 outputs=[average_group, gradual_group, multiply_group, concat_group, golden_group, gaussian_group, aligned_group, manual_group]
             )
 
-        return (enabled, merge_mode, proportion_1, gradual_merge_proportion, mult_factor, concat_until, rescale_sum,
+        # Add enable_for_hr to the returned components
+        return (enabled, enable_for_hr, merge_mode, proportion_1, gradual_merge_proportion, mult_factor, concat_until, rescale_sum,
                 golden_steps, golden_sgm, gaussian_steps, aligned_steps, aligned_model_type, aligned_force_sigma_min,
                 manual_schedule, manual_steps, manual_sgm)
 
     def process_before_every_sampling(self, p, *args, **kwargs):
-        if len(args) >= 16:
-            (self.enabled, self.merge_mode, self.proportion_1, self.gradual_merge_proportion, self.mult_factor,
-            self.concat_until, self.rescale_sum, self.golden_steps, self.golden_sgm, self.gaussian_steps,
-            self.aligned_steps, self.aligned_model_type, self.aligned_force_sigma_min,
-            self.manual_schedule, self.manual_steps, self.manual_sgm) = args[:16]
+        if len(args) >= 17:  # Updated to account for the new parameter
+            (self.enabled, self.enable_for_hr, self.merge_mode, self.proportion_1, self.gradual_merge_proportion, 
+             self.mult_factor, self.concat_until, self.rescale_sum, self.golden_steps, self.golden_sgm, 
+             self.gaussian_steps, self.aligned_steps, self.aligned_model_type, self.aligned_force_sigma_min,
+             self.manual_schedule, self.manual_steps, self.manual_sgm) = args[:17]
         else:
             logging.warning("Not enough arguments provided to process_before_every_sampling")
+            return
+
+        # Check if this is a hi-res fix pass and whether we should process it
+        is_hr_pass = getattr(p, 'is_hr_pass', False)
+        if is_hr_pass and not self.enable_for_hr:
             return
 
         if not self.enabled:
@@ -154,8 +163,10 @@ class SigmasMergeScript(scripts.Script):
                 return sigmas
             p.sampler.get_sigmas = types.MethodType(new_get_sigmas, p.sampler)
 
+        # Update extra generation params with the current settings
         p.extra_generation_params.update({
             "sigmas_merge_enabled": self.enabled,
+            "sigmas_merge_hr_enabled": self.enable_for_hr if is_hr_pass else None,
             "sigmas_merge_mode": self.merge_mode,
             "sigmas_merge_proportion_1": self.proportion_1 if self.merge_mode == "Average" else None,
             "sigmas_gradual_merge_proportion": self.gradual_merge_proportion if self.merge_mode == "Gradual Merge" else None,
@@ -173,6 +184,7 @@ class SigmasMergeScript(scripts.Script):
             "sigmas_manual_sgm": self.manual_sgm if self.merge_mode == "Manual" else None,
         })
 
-        print(f"Sigmas Merge: Enabled: {self.enabled}, Mode: {self.merge_mode}")
+        pass_type = "Hi-res Fix" if is_hr_pass else "Base"
+        print(f"Sigmas Merge: Enabled: {self.enabled}, Mode: {self.merge_mode}, Pass Type: {pass_type}")
 
         return
